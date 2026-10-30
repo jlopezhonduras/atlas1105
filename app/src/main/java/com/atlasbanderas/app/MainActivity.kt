@@ -4,10 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.webkit.JavascriptInterface
-import android.webkit.WebView
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -80,10 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
-import androidx.webkit.WebViewAssetLoader
-import androidx.webkit.WebViewClientCompat
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
@@ -460,50 +453,47 @@ private data class GeoPoint(val longitude: Double, val latitude: Double)
 
 private data class CountryGeometry(val polygons: List<List<GeoPoint>>)
 
-private data class CountryMapData(
-    val details: CountryDetails,
-    val geometry: CountryGeometry,
+private data class GeoBounds(
+    val minLongitude: Double,
+    val maxLongitude: Double,
+    val minLatitude: Double,
+    val maxLatitude: Double,
+) {
+    val longitudeSpan get() = (maxLongitude - minLongitude).takeIf { it > 0 } ?: 1.0
+    val latitudeSpan get() = (maxLatitude - minLatitude).takeIf { it > 0 } ?: 1.0
+
+    fun expanded(longitude: Double, latitude: Double) = GeoBounds(
+        minLongitude = minLongitude - longitude,
+        maxLongitude = maxLongitude + longitude,
+        minLatitude = minLatitude - latitude,
+        maxLatitude = maxLatitude + latitude,
+    )
+
+    fun intersects(other: GeoBounds): Boolean =
+        minLongitude <= other.maxLongitude && maxLongitude >= other.minLongitude &&
+            minLatitude <= other.maxLatitude && maxLatitude >= other.minLatitude
+}
+
+private fun CountryGeometry.bounds(): GeoBounds {
+    val points = polygons.flatten()
+    check(points.isNotEmpty()) { "La geometría no contiene puntos." }
+    return GeoBounds(
+        minLongitude = points.minOf { it.longitude },
+        maxLongitude = points.maxOf { it.longitude },
+        minLatitude = points.minOf { it.latitude },
+        maxLatitude = points.maxOf { it.latitude },
+    )
+}
+
+private data class OfflinePoliticalMap(
+    val selectedCountry: CountryGeometry,
+    val surroundingCountries: List<CountryGeometry>,
 )
 
-private fun CountryGeometry.asLeafletFeatureJson(): String {
-    val polygonsJson = JSONArray()
-    polygons.forEach { ring ->
-        val ringJson = JSONArray()
-        ring.forEach { point ->
-            ringJson.put(JSONArray().put(point.longitude).put(point.latitude))
-        }
-        polygonsJson.put(JSONArray().put(ringJson))
-    }
-    return JSONObject()
-        .put("type", "Feature")
-        .put("properties", JSONObject())
-        .put(
-            "geometry",
-            JSONObject()
-                .put("type", "MultiPolygon")
-                .put("coordinates", polygonsJson),
-        )
-        .toString()
-}
-
-private class AtlasMapWebViewClient(
-    private val assetLoader: WebViewAssetLoader,
-    private val geometryJson: String,
-) : WebViewClientCompat() {
-    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-        return assetLoader.shouldInterceptRequest(request.url)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse? {
-        return assetLoader.shouldInterceptRequest(Uri.parse(url))
-    }
-
-    override fun onPageFinished(view: WebView, url: String) {
-        super.onPageFinished(view, url)
-        view.evaluateJavascript("window.atlasSetGeometry($geometryJson);", null)
-    }
-}
+private data class CountryMapData(
+    val details: CountryDetails,
+    val politicalMap: OfflinePoliticalMap,
+)
 
 @Composable
 private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
@@ -519,7 +509,7 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
             withContext(Dispatchers.IO) {
                 CountryMapData(
                     details = loadCountryDetails(context, country.code),
-                    geometry = loadCountryGeometry(context, country.code),
+                    politicalMap = loadOfflinePoliticalMap(context, country.code),
                 )
             }
         }.onSuccess {
@@ -549,7 +539,7 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Mapa de ${country.name}", color = AtlasNavy, fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
-                        Text("Geometría local, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text("Mapa sin conexión, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     }
                     TextButton(onClick = onDismiss) { Text("Cerrar") }
                 }
@@ -558,7 +548,7 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
                 when {
                     loading -> MapLoadingState()
                     error != null -> MapErrorState(error ?: "")
-                    mapData != null -> CountryMapContent(country, mapData!!.details, mapData!!.geometry)
+                    mapData != null -> CountryMapContent(country, mapData!!.details, mapData!!.politicalMap)
                 }
             }
         }
@@ -589,13 +579,13 @@ private fun MapErrorState(message: String) {
 }
 
 @Composable
-private fun CountryMapContent(country: Country, details: CountryDetails, geometry: CountryGeometry) {
-    Text("Mapa y geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
+private fun CountryMapContent(country: Country, details: CountryDetails, politicalMap: OfflinePoliticalMap) {
+    Text("Mapa político local", color = AtlasNavy, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
-    CountryGeometryMap(country.code, geometry)
+    OfflinePoliticalMapView(politicalMap)
     Spacer(Modifier.height(8.dp))
     Text(
-        "Mapa base de OpenStreetMap. La silueta de ${country.name} se mantiene disponible sin conexión.",
+        "Fronteras y países cercanos de ${country.name}, disponibles sin conexión.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp,
         lineHeight = 17.sp,
@@ -611,93 +601,59 @@ private fun CountryMapContent(country: Country, details: CountryDetails, geometr
 }
 
 @Composable
-private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
-    var mapReady by remember(countryCode) { mutableStateOf(false) }
-    val geometryJson = remember(countryCode) { geometry.asLeafletFeatureJson() }
-    val mapUrl = "https://appassets.androidplatform.net/assets/map.html?country=${countryCode.uppercase(Locale.ROOT)}"
-
-    Box(
+private fun OfflinePoliticalMapView(politicalMap: OfflinePoliticalMap) {
+    Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(250.dp)
             .clip(RoundedCornerShape(16.dp)),
     ) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { webContext ->
-                WebView(webContext).apply {
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    settings.javaScriptEnabled = true
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = false
-                    val assetLoader = WebViewAssetLoader.Builder()
-                        .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webContext))
-                        .build()
-                    webViewClient = AtlasMapWebViewClient(assetLoader, geometryJson)
-                    addJavascriptInterface(
-                        object {
-                            @JavascriptInterface
-                            fun geometryReady() {
-                                post { mapReady = true }
-                            }
-                        },
-                        "AtlasBridge",
-                    )
-                    loadUrl(mapUrl)
-                }
-            },
-            update = { webView ->
-                if (webView.url != mapUrl) {
-                    mapReady = false
-                    webView.loadUrl(mapUrl)
-                }
-            },
-        )
-        if (!mapReady) {
-            OfflineCountryGeometryMap(geometry)
+        drawRect(Color(0xFFD7EBF3))
+        val selectedBounds = politicalMap.selectedCountry.bounds()
+        val paddingLongitude = maxOf(selectedBounds.longitudeSpan * .72, 4.0)
+        val paddingLatitude = maxOf(selectedBounds.latitudeSpan * .72, 3.0)
+        var viewport = selectedBounds.expanded(paddingLongitude, paddingLatitude)
+        val targetAspect = size.width / size.height
+        val viewportAspect = viewport.longitudeSpan / viewport.latitudeSpan
+        if (viewportAspect < targetAspect) {
+            val extra = (viewport.latitudeSpan * targetAspect - viewport.longitudeSpan) / 2
+            viewport = viewport.expanded(extra, 0.0)
+        } else {
+            val extra = (viewport.longitudeSpan / targetAspect - viewport.latitudeSpan) / 2
+            viewport = viewport.expanded(0.0, extra)
         }
-    }
-}
-
-@Composable
-private fun OfflineCountryGeometryMap(geometry: CountryGeometry) {
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .fillMaxSize(),
-    ) {
-        drawRect(Color(0xFFEAF3F5))
-        val points = geometry.polygons.flatten()
-        if (points.isEmpty()) return@Canvas
-        val minLongitude = points.minOf { it.longitude }
-        val maxLongitude = points.maxOf { it.longitude }
-        val minLatitude = points.minOf { it.latitude }
-        val maxLatitude = points.maxOf { it.latitude }
-        val longitudeSpan = (maxLongitude - minLongitude).takeIf { it > 0.0 } ?: 1.0
-        val latitudeSpan = (maxLatitude - minLatitude).takeIf { it > 0.0 } ?: 1.0
-        val padding = 18.dp.toPx()
-        val scale = minOf(
-            (size.width - padding * 2f) / longitudeSpan.toFloat(),
-            (size.height - padding * 2f) / latitudeSpan.toFloat(),
-        )
-        val drawingWidth = longitudeSpan.toFloat() * scale
-        val drawingHeight = latitudeSpan.toFloat() * scale
-        val offsetX = (size.width - drawingWidth) / 2f
-        val offsetY = (size.height - drawingHeight) / 2f
+        val scale = size.width / viewport.longitudeSpan.toFloat()
         fun project(point: GeoPoint) = Offset(
-            x = offsetX + (point.longitude - minLongitude).toFloat() * scale,
-            y = offsetY + (maxLatitude - point.latitude).toFloat() * scale,
+            x = (point.longitude - viewport.minLongitude).toFloat() * scale,
+            y = (viewport.maxLatitude - point.latitude).toFloat() * scale,
         )
-        geometry.polygons.forEach { ring ->
-            if (ring.size < 3) return@forEach
-            val path = Path().apply {
-                moveTo(project(ring.first()).x, project(ring.first()).y)
-                ring.drop(1).forEach { point -> lineTo(project(point).x, project(point).y) }
-                close()
-            }
-            drawPath(path, color = Color(0xFFB8E2E7))
-            drawPath(path, color = AtlasOcean, style = Stroke(width = 1.7.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round))
+
+        for (step in 1..3) {
+            val x = size.width * step / 4f
+            val y = size.height * step / 4f
+            drawLine(Color.White.copy(alpha = .35f), Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
+            drawLine(Color.White.copy(alpha = .35f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
         }
+
+        fun drawCountry(geometry: CountryGeometry, fill: Color, border: Color, borderWidth: Float) {
+            geometry.polygons.forEach { ring ->
+                if (ring.size < 3) return@forEach
+                val path = Path().apply {
+                    moveTo(project(ring.first()).x, project(ring.first()).y)
+                    ring.drop(1).forEach { point -> lineTo(project(point).x, project(point).y) }
+                    close()
+                }
+                drawPath(path, color = fill)
+                drawPath(path, color = border, style = Stroke(width = borderWidth, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            }
+        }
+
+        politicalMap.surroundingCountries.forEach { geometry ->
+            if (geometry.bounds().intersects(viewport)) {
+                drawCountry(geometry, Color(0xFFF7F1E4), Color(0xFF9BAEB1), 1.dp.toPx())
+            }
+        }
+        drawCountry(politicalMap.selectedCountry, Color(0xFF83CDD1), AtlasOcean, 2.dp.toPx())
     }
 }
 
@@ -740,22 +696,32 @@ private fun loadCountryDetails(context: Context, code: String): CountryDetails =
     }
 }
 
-private val countryGeometryCache = mutableMapOf<String, CountryGeometry>()
+private val offlinePoliticalMapCache = mutableMapOf<String, OfflinePoliticalMap>()
 
-private fun loadCountryGeometry(context: Context, code: String): CountryGeometry = synchronized(countryGeometryCache) {
-    countryGeometryCache[code] ?: run {
+private fun loadOfflinePoliticalMap(context: Context, code: String): OfflinePoliticalMap = synchronized(offlinePoliticalMapCache) {
+    offlinePoliticalMapCache[code] ?: run {
         val root = context.assets.open("geometrias.geojson.json").bufferedReader().use { JSONObject(it.readText()) }
         val features = root.getJSONArray("features")
         val countryCode = code.uppercase(Locale.ROOT)
+        val allCountries = mutableListOf<CountryGeometry>()
+        var selectedCountry: CountryGeometry? = null
         for (index in 0 until features.length()) {
             val feature = features.getJSONObject(index)
             val properties = feature.getJSONObject("properties")
-            if (!matchesCountryFeature(countryCode, properties)) continue
             val geometry = parseCountryGeometry(feature.getJSONObject("geometry"))
-            countryGeometryCache[code] = geometry
-            return@synchronized geometry
+            allCountries += geometry
+            if (matchesCountryFeature(countryCode, properties)) selectedCountry = geometry
         }
-        error("No se encontró geometría local para este país.")
+        val selected = selectedCountry ?: error("No se encontró geometría local para este país.")
+        val selectedBounds = selected.bounds()
+        val nearbyBounds = selectedBounds.expanded(
+            longitude = maxOf(selectedBounds.longitudeSpan * .95, 6.0),
+            latitude = maxOf(selectedBounds.latitudeSpan * .95, 4.0),
+        )
+        OfflinePoliticalMap(
+            selectedCountry = selected,
+            surroundingCountries = allCountries.filter { it !== selected && it.bounds().intersects(nearbyBounds) },
+        ).also { offlinePoliticalMapCache[code] = it }
     }
 }
 

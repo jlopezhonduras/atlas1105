@@ -292,6 +292,10 @@ private fun CountryCard(country: Country) {
                             .height(46.dp)
                             .semantics { contentDescription = "Ver mapa y datos geográficos de ${country.name}" },
                         shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFEDE6D8),
+                            contentColor = AtlasNavy,
+                        ),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Detalles", fontWeight = FontWeight.Bold)

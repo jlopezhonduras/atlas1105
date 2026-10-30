@@ -66,6 +66,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -190,6 +192,13 @@ private fun AtlasApp() {
                         Text(if (descending) "Orden: Z–A" else "Orden: A–Z")
                     }
                 }
+            }
+            item {
+                Text(
+                    "Haga clic sobre la bandera para más",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
             }
             if (visibleCountries.isEmpty()) {
                 item { EmptyState() }
@@ -485,9 +494,15 @@ private fun CountryGeometry.bounds(): GeoBounds {
     )
 }
 
+private data class PoliticalMapCountry(
+    val name: String,
+    val geometry: CountryGeometry,
+)
+
 private data class OfflinePoliticalMap(
-    val selectedCountry: CountryGeometry,
-    val surroundingCountries: List<CountryGeometry>,
+    val selectedCountry: PoliticalMapCountry,
+    val surroundingCountries: List<PoliticalMapCountry>,
+    val worldCountries: List<PoliticalMapCountry>,
 )
 
 private data class CountryMapData(
@@ -583,6 +598,10 @@ private fun CountryMapContent(country: Country, details: CountryDetails, politic
     Text("Mapa político local", color = AtlasNavy, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
     OfflinePoliticalMapView(politicalMap)
+    Spacer(Modifier.height(14.dp))
+    Text("Ubicación en el mundo", color = AtlasNavy, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+    Spacer(Modifier.height(7.dp))
+    WorldLocationMap(politicalMap)
     Spacer(Modifier.height(8.dp))
     Text(
         "Fronteras y países cercanos de ${country.name}, disponibles sin conexión.",
@@ -609,7 +628,7 @@ private fun OfflinePoliticalMapView(politicalMap: OfflinePoliticalMap) {
             .clip(RoundedCornerShape(16.dp)),
     ) {
         drawRect(Color(0xFFD7EBF3))
-        val selectedBounds = politicalMap.selectedCountry.bounds()
+        val selectedBounds = politicalMap.selectedCountry.geometry.bounds()
         val paddingLongitude = maxOf(selectedBounds.longitudeSpan * .72, 4.0)
         val paddingLatitude = maxOf(selectedBounds.latitudeSpan * .72, 3.0)
         var viewport = selectedBounds.expanded(paddingLongitude, paddingLatitude)
@@ -635,8 +654,8 @@ private fun OfflinePoliticalMapView(politicalMap: OfflinePoliticalMap) {
             drawLine(Color.White.copy(alpha = .35f), Offset(0f, y), Offset(size.width, y), strokeWidth = 1.dp.toPx())
         }
 
-        fun drawCountry(geometry: CountryGeometry, fill: Color, border: Color, borderWidth: Float) {
-            geometry.polygons.forEach { ring ->
+        fun drawCountry(country: PoliticalMapCountry, fill: Color, border: Color, borderWidth: Float) {
+            country.geometry.polygons.forEach { ring ->
                 if (ring.size < 3) return@forEach
                 val path = Path().apply {
                     moveTo(project(ring.first()).x, project(ring.first()).y)
@@ -648,12 +667,69 @@ private fun OfflinePoliticalMapView(politicalMap: OfflinePoliticalMap) {
             }
         }
 
-        politicalMap.surroundingCountries.forEach { geometry ->
-            if (geometry.bounds().intersects(viewport)) {
-                drawCountry(geometry, Color(0xFFF7F1E4), Color(0xFF9BAEB1), 1.dp.toPx())
-            }
+        val visibleNeighbors = politicalMap.surroundingCountries.filter { it.geometry.bounds().intersects(viewport) }
+        visibleNeighbors.forEach { country ->
+            drawCountry(country, Color(0xFFF7F1E4), Color(0xFF9BAEB1), 1.dp.toPx())
         }
         drawCountry(politicalMap.selectedCountry, Color(0xFF83CDD1), AtlasOcean, 2.dp.toPx())
+
+        val labelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.Black.toArgb()
+            textSize = 8.sp.toPx()
+            textAlign = android.graphics.Paint.Align.CENTER
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            setShadowLayer(2.dp.toPx(), 0f, 1.dp.toPx(), android.graphics.Color.WHITE)
+        }
+        visibleNeighbors.forEach { country ->
+            val bounds = country.geometry.bounds()
+            val labelPoint = project(
+                GeoPoint(
+                    longitude = (bounds.minLongitude + bounds.maxLongitude) / 2,
+                    latitude = (bounds.minLatitude + bounds.maxLatitude) / 2,
+                ),
+            )
+            if (labelPoint.x in 8.dp.toPx()..(size.width - 8.dp.toPx()) && labelPoint.y in 12.dp.toPx()..(size.height - 6.dp.toPx())) {
+                drawContext.canvas.nativeCanvas.drawText(country.name, labelPoint.x, labelPoint.y, labelPaint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorldLocationMap(politicalMap: OfflinePoliticalMap) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(RoundedCornerShape(14.dp)),
+    ) {
+        drawRect(Color(0xFFD7EBF3))
+        val mapWidth = minOf(size.width, size.height * 2f)
+        val mapHeight = mapWidth / 2f
+        val offsetX = (size.width - mapWidth) / 2f
+        val offsetY = (size.height - mapHeight) / 2f
+        fun project(point: GeoPoint) = Offset(
+            x = offsetX + ((point.longitude + 180.0) / 360.0).toFloat() * mapWidth,
+            y = offsetY + ((90.0 - point.latitude) / 180.0).toFloat() * mapHeight,
+        )
+        fun drawCountry(country: PoliticalMapCountry, fill: Color, border: Color, borderWidth: Float) {
+            country.geometry.polygons.forEach { ring ->
+                if (ring.size < 3) return@forEach
+                val path = Path().apply {
+                    moveTo(project(ring.first()).x, project(ring.first()).y)
+                    ring.drop(1).forEach { point -> lineTo(project(point).x, project(point).y) }
+                    close()
+                }
+                drawPath(path, fill)
+                drawPath(path, border, style = Stroke(width = borderWidth, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            }
+        }
+        politicalMap.worldCountries.forEach { country ->
+            if (country !== politicalMap.selectedCountry) {
+                drawCountry(country, Color(0xFFF8F3E8), Color(0xFF9BAEB1), .55.dp.toPx())
+            }
+        }
+        drawCountry(politicalMap.selectedCountry, AtlasCoral, AtlasNavy, 1.2.dp.toPx())
     }
 }
 
@@ -703,24 +779,29 @@ private fun loadOfflinePoliticalMap(context: Context, code: String): OfflinePoli
         val root = context.assets.open("geometrias.geojson.json").bufferedReader().use { JSONObject(it.readText()) }
         val features = root.getJSONArray("features")
         val countryCode = code.uppercase(Locale.ROOT)
-        val allCountries = mutableListOf<CountryGeometry>()
-        var selectedCountry: CountryGeometry? = null
+        val allCountries = mutableListOf<PoliticalMapCountry>()
+        var selectedCountry: PoliticalMapCountry? = null
         for (index in 0 until features.length()) {
             val feature = features.getJSONObject(index)
             val properties = feature.getJSONObject("properties")
             val geometry = parseCountryGeometry(feature.getJSONObject("geometry"))
-            allCountries += geometry
-            if (matchesCountryFeature(countryCode, properties)) selectedCountry = geometry
+            val country = PoliticalMapCountry(
+                name = properties.optString("name_es").ifBlank { properties.optString("name") },
+                geometry = geometry,
+            )
+            allCountries += country
+            if (matchesCountryFeature(countryCode, properties)) selectedCountry = country
         }
         val selected = selectedCountry ?: error("No se encontró geometría local para este país.")
-        val selectedBounds = selected.bounds()
+        val selectedBounds = selected.geometry.bounds()
         val nearbyBounds = selectedBounds.expanded(
             longitude = maxOf(selectedBounds.longitudeSpan * .95, 6.0),
             latitude = maxOf(selectedBounds.latitudeSpan * .95, 4.0),
         )
         OfflinePoliticalMap(
             selectedCountry = selected,
-            surroundingCountries = allCountries.filter { it !== selected && it.bounds().intersects(nearbyBounds) },
+            surroundingCountries = allCountries.filter { it !== selected && it.geometry.bounds().intersects(nearbyBounds) },
+            worldCountries = allCountries,
         ).also { offlinePoliticalMapCache[code] = it }
     }
 }

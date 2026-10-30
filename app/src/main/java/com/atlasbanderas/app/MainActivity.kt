@@ -68,7 +68,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
@@ -466,8 +465,30 @@ private data class CountryMapData(
     val geometry: CountryGeometry,
 )
 
+private fun CountryGeometry.asLeafletFeatureJson(): String {
+    val polygonsJson = JSONArray()
+    polygons.forEach { ring ->
+        val ringJson = JSONArray()
+        ring.forEach { point ->
+            ringJson.put(JSONArray().put(point.longitude).put(point.latitude))
+        }
+        polygonsJson.put(JSONArray().put(ringJson))
+    }
+    return JSONObject()
+        .put("type", "Feature")
+        .put("properties", JSONObject())
+        .put(
+            "geometry",
+            JSONObject()
+                .put("type", "MultiPolygon")
+                .put("coordinates", polygonsJson),
+        )
+        .toString()
+}
+
 private class AtlasMapWebViewClient(
     private val assetLoader: WebViewAssetLoader,
+    private val geometryJson: String,
 ) : WebViewClientCompat() {
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         return assetLoader.shouldInterceptRequest(request.url)
@@ -476,6 +497,11 @@ private class AtlasMapWebViewClient(
     @Deprecated("Deprecated in Java")
     override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse? {
         return assetLoader.shouldInterceptRequest(Uri.parse(url))
+    }
+
+    override fun onPageFinished(view: WebView, url: String) {
+        super.onPageFinished(view, url)
+        view.evaluateJavascript("window.atlasSetGeometry($geometryJson);", null)
     }
 }
 
@@ -587,6 +613,7 @@ private fun CountryMapContent(country: Country, details: CountryDetails, geometr
 @Composable
 private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
     var mapReady by remember(countryCode) { mutableStateOf(false) }
+    val geometryJson = remember(countryCode) { geometry.asLeafletFeatureJson() }
     val mapUrl = "https://appassets.androidplatform.net/assets/map.html?country=${countryCode.uppercase(Locale.ROOT)}"
 
     Box(
@@ -595,11 +622,8 @@ private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
             .height(250.dp)
             .clip(RoundedCornerShape(16.dp)),
     ) {
-        OfflineCountryGeometryMap(geometry)
         AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(alpha = if (mapReady) 1f else 0f),
+            modifier = Modifier.fillMaxSize(),
             factory = { webContext ->
                 WebView(webContext).apply {
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -609,7 +633,7 @@ private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
                     val assetLoader = WebViewAssetLoader.Builder()
                         .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webContext))
                         .build()
-                    webViewClient = AtlasMapWebViewClient(assetLoader)
+                    webViewClient = AtlasMapWebViewClient(assetLoader, geometryJson)
                     addJavascriptInterface(
                         object {
                             @JavascriptInterface
@@ -629,6 +653,9 @@ private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
                 }
             },
         )
+        if (!mapReady) {
+            OfflineCountryGeometryMap(geometry)
+        }
     }
 }
 

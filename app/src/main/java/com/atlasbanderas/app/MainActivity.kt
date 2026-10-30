@@ -682,13 +682,29 @@ private fun OfflinePoliticalMapView(politicalMap: OfflinePoliticalMap) {
         }
         visibleNeighbors.forEach { country ->
             val bounds = country.geometry.bounds()
-            val labelPoint = project(
+            val visiblePoints = country.geometry.polygons.flatten().filter { point ->
+                point.longitude in viewport.minLongitude..viewport.maxLongitude &&
+                    point.latitude in viewport.minLatitude..viewport.maxLatitude
+            }
+            val anchor = if (visiblePoints.isNotEmpty()) {
+                GeoPoint(
+                    longitude = visiblePoints.map { it.longitude }.average(),
+                    latitude = visiblePoints.map { it.latitude }.average(),
+                )
+            } else {
                 GeoPoint(
                     longitude = (bounds.minLongitude + bounds.maxLongitude) / 2,
                     latitude = (bounds.minLatitude + bounds.maxLatitude) / 2,
-                ),
-            )
-            if (labelPoint.x in 8.dp.toPx()..(size.width - 8.dp.toPx()) && labelPoint.y in 12.dp.toPx()..(size.height - 6.dp.toPx())) {
+                )
+            }
+            val rawLabelPoint = project(anchor)
+            val halfLabelWidth = labelPaint.measureText(country.name) / 2f
+            val horizontalMargin = maxOf(8.dp.toPx(), halfLabelWidth + 3.dp.toPx())
+            if (horizontalMargin * 2f < size.width) {
+                val labelPoint = Offset(
+                    x = rawLabelPoint.x.coerceIn(horizontalMargin, size.width - horizontalMargin),
+                    y = rawLabelPoint.y.coerceIn(12.dp.toPx(), size.height - 6.dp.toPx()),
+                )
                 drawContext.canvas.nativeCanvas.drawText(country.name, labelPoint.x, labelPoint.y, labelPaint)
             }
         }

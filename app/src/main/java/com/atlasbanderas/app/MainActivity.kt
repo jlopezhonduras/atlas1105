@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -14,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,16 +24,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -44,6 +51,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,10 +78,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.text.NumberFormat
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.roundToLong
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -228,6 +243,7 @@ private fun StatBadge(number: String, label: String) {
 @Composable
 private fun CountryCard(country: Country) {
     var expanded by rememberSaveable(country.code) { mutableStateOf(false) }
+    var showMap by rememberSaveable(country.code) { mutableStateOf(false) }
     val context = LocalContext.current
 
     ElevatedCard(
@@ -266,6 +282,17 @@ private fun CountryCard(country: Country) {
                     Spacer(Modifier.height(13.dp))
                     HorizontalDivider(color = Color(0xFFE0E5E2))
                     Spacer(Modifier.height(13.dp))
+                    Button(
+                        onClick = { showMap = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 7.dp)
+                            .height(44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Mapa", fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(10.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -279,6 +306,10 @@ private fun CountryCard(country: Country) {
                 }
             }
         }
+    }
+
+    if (showMap) {
+        CountryMapDialog(country = country, onDismiss = { showMap = false })
     }
 }
 
@@ -397,6 +428,219 @@ private fun AtlasDialog(dialog: InfoDialog, dismiss: () -> Unit) {
         text = { Text(body, lineHeight = 21.sp) },
         confirmButton = { TextButton(onClick = dismiss) { Text("Entendido") } },
     )
+}
+
+private data class CountryDetails(
+    val region: String,
+    val subregion: String,
+    val capital: String,
+    val areaKm2: Double?,
+    val coordinates: String,
+    val mapUrl: String,
+)
+
+@Composable
+private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
+    var details by remember(country.code) { mutableStateOf<CountryDetails?>(null) }
+    var error by remember(country.code) { mutableStateOf<String?>(null) }
+    var loading by remember(country.code) { mutableStateOf(true) }
+    val context = LocalContext.current
+
+    LaunchedEffect(country.code) {
+        loading = true
+        error = null
+        runCatching {
+            withContext(Dispatchers.IO) { loadCountryDetails(context, country.code) }
+        }.onSuccess {
+            details = it
+        }.onFailure {
+            error = "No se pudieron cargar los datos geográficos. Revisa tu conexión e inténtalo de nuevo."
+        }
+        loading = false
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+        ) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 680.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Mapa de ${country.name}", color = AtlasNavy, fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
+                        Text("Geometría, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    }
+                    TextButton(onClick = onDismiss) { Text("Cerrar") }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                when {
+                    loading -> MapLoadingState()
+                    error != null -> MapErrorState(error ?: "")
+                    details != null -> CountryMapContent(country, details!!)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MapLoadingState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(250.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = AtlasOcean)
+    }
+}
+
+@Composable
+private fun MapErrorState(message: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFFFF1ED),
+    ) {
+        Text(message, modifier = Modifier.padding(18.dp), color = AtlasNavy, lineHeight = 20.sp)
+    }
+}
+
+@Composable
+private fun CountryMapContent(country: Country, details: CountryDetails) {
+    Text("Geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(8.dp))
+    AndroidView(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(250.dp)
+            .clip(RoundedCornerShape(16.dp)),
+        factory = { context ->
+            WebView(context).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.loadWithOverviewMode = true
+                settings.useWideViewPort = true
+                webViewClient = WebViewClient()
+            }
+        },
+        update = { webView ->
+            if (webView.url != details.mapUrl) webView.loadUrl(details.mapUrl)
+        },
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "El mapa muestra los límites y la ubicación de ${country.name} según OpenStreetMap.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+    )
+    Spacer(Modifier.height(18.dp))
+    HorizontalDivider(color = Color(0xFFE0E5E2))
+    Spacer(Modifier.height(12.dp))
+    CountryDetailRow("Continente", details.region)
+    CountryDetailRow("Subregión", details.subregion)
+    CountryDetailRow("Capital", details.capital)
+    CountryDetailRow("Extensión", details.areaKm2?.formatArea() ?: "No disponible")
+    CountryDetailRow("Coordenadas", details.coordinates)
+}
+
+@Composable
+private fun CountryDetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(label, modifier = Modifier.width(98.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Text(value, modifier = Modifier.weight(1f), color = AtlasNavy, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+    }
+}
+
+private val countryDetailsCache = mutableMapOf<String, CountryDetails>()
+
+private fun loadCountryDetails(context: Context, code: String): CountryDetails = synchronized(countryDetailsCache) {
+    countryDetailsCache[code] ?: run {
+        val payload = context.assets.open("country_details.json").bufferedReader().use { it.readText() }
+        val countries = JSONArray(payload)
+        for (index in 0 until countries.length()) {
+            val data = countries.getJSONObject(index)
+            val latitude = data.optDouble("latitude").takeIf { !it.isNaN() }
+            val longitude = data.optDouble("longitude").takeIf { !it.isNaN() }
+            val fallbackMapUrl = if (latitude != null && longitude != null) {
+                "https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude#map=4/$latitude/$longitude"
+            } else {
+                "https://www.openstreetmap.org/search?query=${Uri.encode(data.optString("name"))}"
+            }
+            countryDetailsCache[data.getString("code")] = CountryDetails(
+                region = data.optString("region").localizedRegion(),
+                subregion = data.optString("subregion").localizedSubregion(),
+                capital = data.optString("capital").ifBlank { "No disponible" },
+                areaKm2 = data.optDouble("areaKm2").takeIf { !it.isNaN() && it > 0 },
+                coordinates = if (latitude != null && longitude != null) {
+                    "${latitude.formatCoordinate()}°, ${longitude.formatCoordinate()}°"
+                } else {
+                    "No disponible"
+                },
+                mapUrl = data.optString("mapUrl").ifBlank { fallbackMapUrl },
+            )
+        }
+        countryDetailsCache[code] ?: error("No se encontraron datos para este país.")
+    }
+}
+
+private fun Double.formatArea(): String =
+    "${NumberFormat.getNumberInstance(Locale("es", "GT")).format(roundToLong())} km²"
+
+private fun Double.formatCoordinate(): String =
+    String.format(Locale.US, "%.4f", this)
+
+private fun String.localizedRegion(): String = when (this) {
+    "Africa" -> "África"
+    "Americas" -> "América"
+    "Asia" -> "Asia"
+    "Europe" -> "Europa"
+    "Oceania" -> "Oceanía"
+    "Antarctic" -> "Antártida"
+    else -> ifBlank { "No disponible" }
+}
+
+private fun String.localizedSubregion(): String = when (this) {
+    "Northern Africa" -> "Norte de África"
+    "Middle Africa" -> "África central"
+    "Eastern Africa" -> "África oriental"
+    "Western Africa" -> "África occidental"
+    "Southern Africa" -> "África austral"
+    "Central America" -> "América central"
+    "Caribbean" -> "Caribe"
+    "Northern America" -> "América del Norte"
+    "South America" -> "América del Sur"
+    "Central Asia" -> "Asia central"
+    "Eastern Asia" -> "Asia oriental"
+    "South-Eastern Asia" -> "Asia sudoriental"
+    "Southern Asia" -> "Asia meridional"
+    "Western Asia" -> "Asia occidental"
+    "Eastern Europe" -> "Europa oriental"
+    "Northern Europe" -> "Europa septentrional"
+    "Southern Europe" -> "Europa meridional"
+    "Western Europe" -> "Europa occidental"
+    "Australia and New Zealand" -> "Australia y Nueva Zelanda"
+    "Melanesia" -> "Melanesia"
+    "Micronesia" -> "Micronesia"
+    "Polynesia" -> "Polinesia"
+    else -> ifBlank { "No disponible" }
 }
 
 private fun String.normalized(): String =

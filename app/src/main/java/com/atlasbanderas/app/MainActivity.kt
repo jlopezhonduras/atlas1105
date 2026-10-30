@@ -4,10 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -70,7 +66,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -81,13 +76,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 import java.text.NumberFormat
 import java.text.Normalizer
 import java.util.Locale
@@ -460,14 +455,20 @@ private data class CountryDetails(
     val capital: String,
     val areaKm2: Double?,
     val coordinates: String,
-    val latitude: Double?,
-    val longitude: Double?,
-    val mapUrl: String,
+)
+
+private data class GeoPoint(val longitude: Double, val latitude: Double)
+
+private data class CountryGeometry(val polygons: List<List<GeoPoint>>)
+
+private data class CountryMapData(
+    val details: CountryDetails,
+    val geometry: CountryGeometry,
 )
 
 @Composable
 private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
-    var details by remember(country.code) { mutableStateOf<CountryDetails?>(null) }
+    var mapData by remember(country.code) { mutableStateOf<CountryMapData?>(null) }
     var error by remember(country.code) { mutableStateOf<String?>(null) }
     var loading by remember(country.code) { mutableStateOf(true) }
     val context = LocalContext.current
@@ -476,11 +477,16 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
         loading = true
         error = null
         runCatching {
-            withContext(Dispatchers.IO) { loadCountryDetails(context, country.code) }
+            withContext(Dispatchers.IO) {
+                CountryMapData(
+                    details = loadCountryDetails(context, country.code),
+                    geometry = loadCountryGeometry(context, country.code),
+                )
+            }
         }.onSuccess {
-            details = it
+            mapData = it
         }.onFailure {
-            error = "No se pudieron cargar los datos geográficos. Revisa tu conexión e inténtalo de nuevo."
+            error = "No se pudieron cargar los datos geográficos locales."
         }
         loading = false
     }
@@ -504,7 +510,7 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Mapa de ${country.name}", color = AtlasNavy, fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
-                        Text("Geometría, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Text("Geometría local, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     }
                     TextButton(onClick = onDismiss) { Text("Cerrar") }
                 }
@@ -513,7 +519,7 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
                 when {
                     loading -> MapLoadingState()
                     error != null -> MapErrorState(error ?: "")
-                    details != null -> CountryMapContent(country, details!!)
+                    mapData != null -> CountryMapContent(country, mapData!!.details, mapData!!.geometry)
                 }
             }
         }
@@ -544,13 +550,13 @@ private fun MapErrorState(message: String) {
 }
 
 @Composable
-private fun CountryMapContent(country: Country, details: CountryDetails) {
+private fun CountryMapContent(country: Country, details: CountryDetails, geometry: CountryGeometry) {
     Text("Geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
-    CountryGeometryMap(details)
+    CountryGeometryMap(geometry)
     Spacer(Modifier.height(8.dp))
     Text(
-        "El mapa muestra los límites y la ubicación de ${country.name} según OpenStreetMap.",
+        "Silueta local de ${country.name}. Está disponible sin conexión.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp,
         lineHeight = 17.sp,
@@ -566,84 +572,45 @@ private fun CountryMapContent(country: Country, details: CountryDetails) {
 }
 
 @Composable
-private fun CountryGeometryMap(details: CountryDetails) {
-    var mapLoaded by remember(details.mapUrl) { mutableStateOf(false) }
-    var mapFailed by remember(details.mapUrl) { mutableStateOf(false) }
-    Box(
+private fun CountryGeometryMap(geometry: CountryGeometry) {
+    Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(250.dp)
             .clip(RoundedCornerShape(16.dp)),
     ) {
-        WorldLocationSketch(details.latitude, details.longitude, Modifier.fillMaxSize())
-        AndroidView(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = if (mapLoaded) 1f else 0f },
-            factory = { context ->
-                WebView(context).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.userAgentString = "${settings.userAgentString} AtlasDeBanderas1105/1.0"
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            if (!mapFailed) mapLoaded = true
-                        }
-
-                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
-                            if (request?.isForMainFrame == true) {
-                                mapFailed = true
-                                mapLoaded = false
-                            }
-                        }
-                    }
-                }
-            },
-            update = { webView ->
-                if (webView.url != details.mapUrl) {
-                    mapLoaded = false
-                    mapFailed = false
-                    webView.loadUrl(details.mapUrl)
-                }
-            },
-        )
-        if (!mapLoaded) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp),
-                color = Color.White.copy(alpha = .90f),
-                shape = RoundedCornerShape(999.dp),
-            ) {
-                Text(
-                    if (mapFailed) "Mostrando ubicación global" else "Cargando geometría…",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    color = AtlasNavy,
-                    fontSize = 12.sp,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorldLocationSketch(latitude: Double?, longitude: Double?, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
         drawRect(Color(0xFFEAF3F5))
-        val stroke = 1.dp.toPx()
-        val grid = Color(0xFF94BBC4)
-        for (fraction in listOf(.2f, .4f, .6f, .8f)) {
-            drawLine(grid, Offset(size.width * fraction, 0f), Offset(size.width * fraction, size.height), strokeWidth = stroke)
-            drawLine(grid, Offset(0f, size.height * fraction), Offset(size.width, size.height * fraction), strokeWidth = stroke)
+        val points = geometry.polygons.flatten()
+        if (points.isEmpty()) return@Canvas
+        val minLongitude = points.minOf { it.longitude }
+        val maxLongitude = points.maxOf { it.longitude }
+        val minLatitude = points.minOf { it.latitude }
+        val maxLatitude = points.maxOf { it.latitude }
+        val longitudeSpan = (maxLongitude - minLongitude).takeIf { it > 0.0 } ?: 1.0
+        val latitudeSpan = (maxLatitude - minLatitude).takeIf { it > 0.0 } ?: 1.0
+        val padding = 18.dp.toPx()
+        val scale = minOf(
+            (size.width - padding * 2f) / longitudeSpan.toFloat(),
+            (size.height - padding * 2f) / latitudeSpan.toFloat(),
+        )
+        val drawingWidth = longitudeSpan.toFloat() * scale
+        val drawingHeight = latitudeSpan.toFloat() * scale
+        val offsetX = (size.width - drawingWidth) / 2f
+        val offsetY = (size.height - drawingHeight) / 2f
+        fun project(point: GeoPoint) = Offset(
+            x = offsetX + (point.longitude - minLongitude).toFloat() * scale,
+            y = offsetY + (maxLatitude - point.latitude).toFloat() * scale,
+        )
+        geometry.polygons.forEach { ring ->
+            if (ring.size < 3) return@forEach
+            val path = Path().apply {
+                moveTo(project(ring.first()).x, project(ring.first()).y)
+                ring.drop(1).forEach { point -> lineTo(project(point).x, project(point).y) }
+                close()
+            }
+            drawPath(path, color = Color(0xFFB8E2E7))
+            drawPath(path, color = AtlasOcean, style = Stroke(width = 1.7.dp.toPx(), join = androidx.compose.ui.graphics.StrokeJoin.Round))
         }
-        val pinX = longitude?.let { ((it + 180.0) / 360.0 * size.width).toFloat() } ?: size.width / 2f
-        val pinY = latitude?.let { ((90.0 - it) / 180.0 * size.height).toFloat() } ?: size.height / 2f
-        drawCircle(Color.White.copy(alpha = .85f), radius = 13.dp.toPx(), center = Offset(pinX, pinY))
-        drawCircle(AtlasCoral, radius = 8.dp.toPx(), center = Offset(pinX, pinY))
-        drawCircle(Color.White, radius = 3.dp.toPx(), center = Offset(pinX, pinY))
     }
 }
 
@@ -670,47 +637,74 @@ private fun loadCountryDetails(context: Context, code: String): CountryDetails =
             val data = countries.getJSONObject(index)
             val latitude = data.optDouble("latitude").takeIf { !it.isNaN() }
             val longitude = data.optDouble("longitude").takeIf { !it.isNaN() }
-            val areaKm2 = data.optDouble("areaKm2").takeIf { !it.isNaN() && it > 0 }
-            val fallbackMapUrl = if (latitude != null && longitude != null) {
-                openStreetMapEmbedUrl(latitude, longitude, areaKm2)
-            } else {
-                "https://www.openstreetmap.org/search?query=${Uri.encode(data.optString("name"))}"
-            }
             countryDetailsCache[data.getString("code")] = CountryDetails(
                 region = data.optString("region").localizedRegion(),
                 subregion = data.optString("subregion").localizedSubregion(),
                 capital = data.optString("capital").ifBlank { "No disponible" },
-                areaKm2 = areaKm2,
+                areaKm2 = data.optDouble("areaKm2").takeIf { !it.isNaN() && it > 0 },
                 coordinates = if (latitude != null && longitude != null) {
                     "${latitude.formatCoordinate()}°, ${longitude.formatCoordinate()}°"
                 } else {
                     "No disponible"
                 },
-                latitude = latitude,
-                longitude = longitude,
-                mapUrl = data.optString("mapUrl").ifBlank { fallbackMapUrl },
             )
         }
         countryDetailsCache[code] ?: error("No se encontraron datos para este país.")
     }
 }
 
-private fun openStreetMapEmbedUrl(latitude: Double, longitude: Double, areaKm2: Double?): String {
-    val delta = when {
-        areaKm2 == null -> 7.0
-        areaKm2 > 5_000_000 -> 25.0
-        areaKm2 > 1_000_000 -> 15.0
-        areaKm2 > 250_000 -> 8.0
-        areaKm2 > 30_000 -> 3.5
-        else -> 1.5
+private val countryGeometryCache = mutableMapOf<String, CountryGeometry>()
+
+private fun loadCountryGeometry(context: Context, code: String): CountryGeometry = synchronized(countryGeometryCache) {
+    countryGeometryCache[code] ?: run {
+        val root = context.assets.open("geometrias.geojson.json").bufferedReader().use { JSONObject(it.readText()) }
+        val features = root.getJSONArray("features")
+        val countryCode = code.uppercase(Locale.ROOT)
+        for (index in 0 until features.length()) {
+            val feature = features.getJSONObject(index)
+            val properties = feature.getJSONObject("properties")
+            if (!matchesCountryFeature(countryCode, properties)) continue
+            val geometry = parseCountryGeometry(feature.getJSONObject("geometry"))
+            countryGeometryCache[code] = geometry
+            return@synchronized geometry
+        }
+        error("No se encontró geometría local para este país.")
     }
-    val west = (longitude - delta).mapNumber()
-    val east = (longitude + delta).mapNumber()
-    val south = (latitude - delta).coerceAtLeast(-89.9).mapNumber()
-    val north = (latitude + delta).coerceAtMost(89.9).mapNumber()
-    val markerLatitude = latitude.mapNumber()
-    val markerLongitude = longitude.mapNumber()
-    return "https://www.openstreetmap.org/export/embed.html?bbox=$west%2C$south%2C$east%2C$north&layer=mapnik&marker=$markerLatitude%2C$markerLongitude"
+}
+
+private fun matchesCountryFeature(countryCode: String, properties: JSONObject): Boolean {
+    val isoCode = properties.optString("iso_a2").uppercase(Locale.ROOT)
+    if (isoCode == countryCode) return true
+    val name = properties.optString("name")
+    return (countryCode == "FR" && name == "France") || (countryCode == "NO" && name == "Norway")
+}
+
+private fun parseCountryGeometry(geometry: JSONObject): CountryGeometry {
+    fun parseRing(rawRing: JSONArray?): List<GeoPoint> {
+        if (rawRing == null) return emptyList()
+        return buildList {
+            for (index in 0 until rawRing.length()) {
+                val point = rawRing.optJSONArray(index) ?: continue
+                val longitude = point.optDouble(0)
+                val latitude = point.optDouble(1)
+                if (!longitude.isNaN() && !latitude.isNaN()) add(GeoPoint(longitude, latitude))
+            }
+        }
+    }
+
+    val polygons = mutableListOf<List<GeoPoint>>()
+    val coordinates = geometry.getJSONArray("coordinates")
+    when (geometry.getString("type")) {
+        "Polygon" -> parseRing(coordinates.optJSONArray(0)).takeIf { it.size >= 3 }?.let(polygons::add)
+        "MultiPolygon" -> {
+            for (index in 0 until coordinates.length()) {
+                val rings = coordinates.optJSONArray(index)
+                parseRing(rings?.optJSONArray(0)).takeIf { it.size >= 3 }?.let(polygons::add)
+            }
+        }
+    }
+    if (polygons.isEmpty()) error("La geometría local no contiene polígonos válidos.")
+    return CountryGeometry(polygons)
 }
 
 private fun Double.formatArea(): String =
@@ -718,9 +712,6 @@ private fun Double.formatArea(): String =
 
 private fun Double.formatCoordinate(): String =
     String.format(Locale.US, "%.4f", this)
-
-private fun Double.mapNumber(): String =
-    String.format(Locale.US, "%.5f", this)
 
 private fun String.localizedRegion(): String = when (this) {
     "Africa" -> "África"

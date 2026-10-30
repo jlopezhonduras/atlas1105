@@ -15,7 +15,7 @@ Aplicación Android nativa, creada con Kotlin y Jetpack Compose.
 - Búsqueda sin distinción de mayúsculas ni acentos.
 - Banderas cargadas de forma segura desde FlagCDN.
 - Icono de aplicación original: una brújula sobre un globo, en azul, coral y dorado.
-- Botón “Mapa” para abrir la geometría del país en OpenStreetMap y consultar continente, subregión, capital, extensión y coordenadas. Los datos de 195 países se incluyen dentro de la app.
+- Botón con icono de globo para abrir la geometría local del país y consultar continente, subregión, capital, extensión y coordenadas. Los datos y los polígonos GeoJSON se incluyen dentro de la app, por lo que el visor funciona sin conexión.
 - Al tocar una bandera se expanden botones para buscar el país en Google, TikTok y YouTube.
 - Pantallas informativas de “Acerca de” y “Términos y condiciones”.
 

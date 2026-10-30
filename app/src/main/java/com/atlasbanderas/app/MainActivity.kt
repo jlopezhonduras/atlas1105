@@ -417,8 +417,8 @@ private fun EmptyState() {
 @Composable
 private fun AtlasDialog(dialog: InfoDialog, dismiss: () -> Unit) {
     val (title, body) = when (dialog) {
-        InfoDialog.ABOUT -> "Acerca de" to """
-            Atlas de Banderas 1105 es una guía visual para explorar las banderas de 195 países en español. Sus banderas, datos y mapas se almacenan localmente.
+        InfoDialog.ABOUT -> "Acerca de SISDEHON 1105" to """
+            Atlas de Banderas 1105 es una guía visual desarrollada por SISDEHON 1105 · Sistemas de Honduras. Sus banderas, datos y mapas se almacenan localmente.
 
             Fuentes y atribuciones:
             • Datos de países: mledoze/countries (ODbL 1.0).
@@ -432,6 +432,14 @@ private fun AtlasDialog(dialog: InfoDialog, dismiss: () -> Unit) {
     }
     AlertDialog(
         onDismissRequest = dismiss,
+        icon = {
+            Image(
+                painter = painterResource(R.drawable.logo_sisdehon_1105),
+                contentDescription = "Logo de SISDEHON 1105",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(if (dialog == InfoDialog.ABOUT) 112.dp else 58.dp),
+            )
+        },
         title = { Text(title, color = AtlasNavy, fontWeight = FontWeight.ExtraBold) },
         text = { Text(body, lineHeight = 21.sp) },
         confirmButton = { TextButton(onClick = dismiss) { Text("Entendido") } },

@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -68,6 +70,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -287,10 +290,11 @@ private fun CountryCard(country: Country) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 7.dp)
-                            .height(44.dp),
+                            .height(46.dp)
+                            .semantics { contentDescription = "Ver mapa y datos geográficos de ${country.name}" },
                         shape = RoundedCornerShape(12.dp),
                     ) {
-                        Text("Mapa", fontWeight = FontWeight.Bold)
+                        WorldMapIcon()
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(
@@ -406,6 +410,26 @@ private fun DrawScope.drawYouTubeMark() {
 }
 
 @Composable
+private fun WorldMapIcon() {
+    Canvas(modifier = Modifier.size(27.dp)) {
+        val stroke = 1.8.dp.toPx()
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val radius = size.minDimension / 2f - stroke
+        drawCircle(Color.White, radius = radius, center = center)
+        drawCircle(AtlasNavy, radius = radius, center = center, style = Stroke(stroke))
+        drawOval(
+            color = AtlasNavy,
+            topLeft = Offset(center.x - radius * .45f, center.y - radius),
+            size = Size(radius * .90f, radius * 2f),
+            style = Stroke(stroke),
+        )
+        drawLine(AtlasNavy, Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), strokeWidth = stroke)
+        drawLine(AtlasNavy, Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), strokeWidth = stroke)
+        drawCircle(AtlasCoral, radius = radius * .17f, center = Offset(center.x + radius * .22f, center.y - radius * .18f))
+    }
+}
+
+@Composable
 private fun EmptyState() {
     Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color.White) {
         Column(modifier = Modifier.padding(30.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -436,6 +460,8 @@ private data class CountryDetails(
     val capital: String,
     val areaKm2: Double?,
     val coordinates: String,
+    val latitude: Double?,
+    val longitude: Double?,
     val mapUrl: String,
 )
 
@@ -521,24 +547,7 @@ private fun MapErrorState(message: String) {
 private fun CountryMapContent(country: Country, details: CountryDetails) {
     Text("Geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
-    AndroidView(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(250.dp)
-            .clip(RoundedCornerShape(16.dp)),
-        factory = { context ->
-            WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                webViewClient = WebViewClient()
-            }
-        },
-        update = { webView ->
-            if (webView.url != details.mapUrl) webView.loadUrl(details.mapUrl)
-        },
-    )
+    CountryGeometryMap(details)
     Spacer(Modifier.height(8.dp))
     Text(
         "El mapa muestra los límites y la ubicación de ${country.name} según OpenStreetMap.",
@@ -554,6 +563,88 @@ private fun CountryMapContent(country: Country, details: CountryDetails) {
     CountryDetailRow("Capital", details.capital)
     CountryDetailRow("Extensión", details.areaKm2?.formatArea() ?: "No disponible")
     CountryDetailRow("Coordenadas", details.coordinates)
+}
+
+@Composable
+private fun CountryGeometryMap(details: CountryDetails) {
+    var mapLoaded by remember(details.mapUrl) { mutableStateOf(false) }
+    var mapFailed by remember(details.mapUrl) { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(250.dp)
+            .clip(RoundedCornerShape(16.dp)),
+    ) {
+        WorldLocationSketch(details.latitude, details.longitude, Modifier.fillMaxSize())
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = if (mapLoaded) 1f else 0f },
+            factory = { context ->
+                WebView(context).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.loadWithOverviewMode = true
+                    settings.useWideViewPort = true
+                    settings.userAgentString = "${settings.userAgentString} AtlasDeBanderas1105/1.0"
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            if (!mapFailed) mapLoaded = true
+                        }
+
+                        override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                            if (request?.isForMainFrame == true) {
+                                mapFailed = true
+                                mapLoaded = false
+                            }
+                        }
+                    }
+                }
+            },
+            update = { webView ->
+                if (webView.url != details.mapUrl) {
+                    mapLoaded = false
+                    mapFailed = false
+                    webView.loadUrl(details.mapUrl)
+                }
+            },
+        )
+        if (!mapLoaded) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp),
+                color = Color.White.copy(alpha = .90f),
+                shape = RoundedCornerShape(999.dp),
+            ) {
+                Text(
+                    if (mapFailed) "Mostrando ubicación global" else "Cargando geometría…",
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    color = AtlasNavy,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorldLocationSketch(latitude: Double?, longitude: Double?, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        drawRect(Color(0xFFEAF3F5))
+        val stroke = 1.dp.toPx()
+        val grid = Color(0xFF94BBC4)
+        for (fraction in listOf(.2f, .4f, .6f, .8f)) {
+            drawLine(grid, Offset(size.width * fraction, 0f), Offset(size.width * fraction, size.height), strokeWidth = stroke)
+            drawLine(grid, Offset(0f, size.height * fraction), Offset(size.width, size.height * fraction), strokeWidth = stroke)
+        }
+        val pinX = longitude?.let { ((it + 180.0) / 360.0 * size.width).toFloat() } ?: size.width / 2f
+        val pinY = latitude?.let { ((90.0 - it) / 180.0 * size.height).toFloat() } ?: size.height / 2f
+        drawCircle(Color.White.copy(alpha = .85f), radius = 13.dp.toPx(), center = Offset(pinX, pinY))
+        drawCircle(AtlasCoral, radius = 8.dp.toPx(), center = Offset(pinX, pinY))
+        drawCircle(Color.White, radius = 3.dp.toPx(), center = Offset(pinX, pinY))
+    }
 }
 
 @Composable
@@ -579,8 +670,9 @@ private fun loadCountryDetails(context: Context, code: String): CountryDetails =
             val data = countries.getJSONObject(index)
             val latitude = data.optDouble("latitude").takeIf { !it.isNaN() }
             val longitude = data.optDouble("longitude").takeIf { !it.isNaN() }
+            val areaKm2 = data.optDouble("areaKm2").takeIf { !it.isNaN() && it > 0 }
             val fallbackMapUrl = if (latitude != null && longitude != null) {
-                "https://www.openstreetmap.org/?mlat=$latitude&mlon=$longitude#map=4/$latitude/$longitude"
+                openStreetMapEmbedUrl(latitude, longitude, areaKm2)
             } else {
                 "https://www.openstreetmap.org/search?query=${Uri.encode(data.optString("name"))}"
             }
@@ -588,12 +680,14 @@ private fun loadCountryDetails(context: Context, code: String): CountryDetails =
                 region = data.optString("region").localizedRegion(),
                 subregion = data.optString("subregion").localizedSubregion(),
                 capital = data.optString("capital").ifBlank { "No disponible" },
-                areaKm2 = data.optDouble("areaKm2").takeIf { !it.isNaN() && it > 0 },
+                areaKm2 = areaKm2,
                 coordinates = if (latitude != null && longitude != null) {
                     "${latitude.formatCoordinate()}°, ${longitude.formatCoordinate()}°"
                 } else {
                     "No disponible"
                 },
+                latitude = latitude,
+                longitude = longitude,
                 mapUrl = data.optString("mapUrl").ifBlank { fallbackMapUrl },
             )
         }
@@ -601,11 +695,32 @@ private fun loadCountryDetails(context: Context, code: String): CountryDetails =
     }
 }
 
+private fun openStreetMapEmbedUrl(latitude: Double, longitude: Double, areaKm2: Double?): String {
+    val delta = when {
+        areaKm2 == null -> 7.0
+        areaKm2 > 5_000_000 -> 25.0
+        areaKm2 > 1_000_000 -> 15.0
+        areaKm2 > 250_000 -> 8.0
+        areaKm2 > 30_000 -> 3.5
+        else -> 1.5
+    }
+    val west = (longitude - delta).mapNumber()
+    val east = (longitude + delta).mapNumber()
+    val south = (latitude - delta).coerceAtLeast(-89.9).mapNumber()
+    val north = (latitude + delta).coerceAtMost(89.9).mapNumber()
+    val markerLatitude = latitude.mapNumber()
+    val markerLongitude = longitude.mapNumber()
+    return "https://www.openstreetmap.org/export/embed.html?bbox=$west%2C$south%2C$east%2C$north&layer=mapnik&marker=$markerLatitude%2C$markerLongitude"
+}
+
 private fun Double.formatArea(): String =
     "${NumberFormat.getNumberInstance(Locale("es", "GT")).format(roundToLong())} km²"
 
 private fun Double.formatCoordinate(): String =
     String.format(Locale.US, "%.4f", this)
+
+private fun Double.mapNumber(): String =
+    String.format(Locale.US, "%.5f", this)
 
 private fun String.localizedRegion(): String = when (this) {
     "Africa" -> "África"

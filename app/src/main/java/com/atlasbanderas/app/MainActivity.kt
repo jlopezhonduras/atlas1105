@@ -6,7 +6,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -82,6 +83,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewClientCompat
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
@@ -463,6 +466,19 @@ private data class CountryMapData(
     val geometry: CountryGeometry,
 )
 
+private class AtlasMapWebViewClient(
+    private val assetLoader: WebViewAssetLoader,
+) : WebViewClientCompat() {
+    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        return assetLoader.shouldInterceptRequest(request.url)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse? {
+        return assetLoader.shouldInterceptRequest(Uri.parse(url))
+    }
+}
+
 @Composable
 private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
     var mapData by remember(country.code) { mutableStateOf<CountryMapData?>(null) }
@@ -571,7 +587,7 @@ private fun CountryMapContent(country: Country, details: CountryDetails, geometr
 @Composable
 private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
     var mapReady by remember(countryCode) { mutableStateOf(false) }
-    val mapUrl = "file:///android_asset/map.html?country=${countryCode.uppercase(Locale.ROOT)}"
+    val mapUrl = "https://appassets.androidplatform.net/assets/map.html?country=${countryCode.uppercase(Locale.ROOT)}"
 
     Box(
         modifier = Modifier
@@ -588,10 +604,12 @@ private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
                 WebView(webContext).apply {
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     settings.javaScriptEnabled = true
-                    settings.allowFileAccess = true
-                    @Suppress("DEPRECATION")
-                    settings.allowFileAccessFromFileURLs = true
-                    webViewClient = WebViewClient()
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
+                    val assetLoader = WebViewAssetLoader.Builder()
+                        .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(webContext))
+                        .build()
+                    webViewClient = AtlasMapWebViewClient(assetLoader)
                     addJavascriptInterface(
                         object {
                             @JavascriptInterface

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <link rel="stylesheet" href="leaflet.css">
+  <style>
+    html, body, #map { width: 100%; height: 100%; margin: 0; background: #eaf3f5; }
+    .leaflet-control-attribution { font-size: 9px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="leaflet.js"></script>
+  <script>
+    (function () {
+      const countryCode = new URLSearchParams(window.location.search).get('country') || '';
+      const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([18, 0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      }).addTo(map);
+
+      const matchesCountry = (feature) => {
+        const properties = feature.properties || {};
+        return properties.iso_a2 === countryCode ||
+          (countryCode === 'FR' && properties.name === 'France') ||
+          (countryCode === 'NO' && properties.name === 'Norway');
+      };
+
+      fetch('geometrias.geojson.json')
+        .then((response) => {
+          if (!response.ok) throw new Error('No se pudo leer el GeoJSON local');
+          return response.json();
+        })
+        .then((data) => {
+          const feature = data.features.find(matchesCountry);
+          if (!feature) throw new Error('No se encontró la geometría del país');
+          const outline = L.geoJSON(feature, {
+            style: {
+              color: '#0b5e75',
+              weight: 2,
+              fillColor: '#b8e2e7',
+              fillOpacity: 0.42
+            }
+          }).addTo(map);
+          map.fitBounds(outline.getBounds(), { padding: [16, 16], maxZoom: 7 });
+          if (window.AtlasBridge && window.AtlasBridge.geometryReady) {
+            window.AtlasBridge.geometryReady();
+          }
+        })
+        .catch(() => {
+          // La aplicación conserva la silueta nativa como respaldo sin conexión.
+        });
+    })();
+  </script>
+</body>
+</html>

@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
@@ -64,6 +67,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
@@ -76,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -222,7 +227,6 @@ private fun AtlasHero() {
             Spacer(Modifier.height(18.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatBadge("195", "países")
-                StatBadge("3", "búsquedas")
             }
         }
     }
@@ -289,7 +293,16 @@ private fun CountryCard(country: Country) {
                             .semantics { contentDescription = "Ver mapa y datos geográficos de ${country.name}" },
                         shape = RoundedCornerShape(12.dp),
                     ) {
-                        WorldMapIcon()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Detalles", fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(8.dp))
+                            Image(
+                                painter = painterResource(R.drawable.globe_detalles),
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(
@@ -402,26 +415,6 @@ private fun DrawScope.drawYouTubeMark() {
         close()
     }
     drawPath(triangle, Color.White)
-}
-
-@Composable
-private fun WorldMapIcon() {
-    Canvas(modifier = Modifier.size(27.dp)) {
-        val stroke = 1.8.dp.toPx()
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val radius = size.minDimension / 2f - stroke
-        drawCircle(Color.White, radius = radius, center = center)
-        drawCircle(AtlasNavy, radius = radius, center = center, style = Stroke(stroke))
-        drawOval(
-            color = AtlasNavy,
-            topLeft = Offset(center.x - radius * .45f, center.y - radius),
-            size = Size(radius * .90f, radius * 2f),
-            style = Stroke(stroke),
-        )
-        drawLine(AtlasNavy, Offset(center.x - radius, center.y), Offset(center.x + radius, center.y), strokeWidth = stroke)
-        drawLine(AtlasNavy, Offset(center.x, center.y - radius), Offset(center.x, center.y + radius), strokeWidth = stroke)
-        drawCircle(AtlasCoral, radius = radius * .17f, center = Offset(center.x + radius * .22f, center.y - radius * .18f))
-    }
 }
 
 @Composable
@@ -551,12 +544,12 @@ private fun MapErrorState(message: String) {
 
 @Composable
 private fun CountryMapContent(country: Country, details: CountryDetails, geometry: CountryGeometry) {
-    Text("Geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
+    Text("Mapa y geometría del país", color = AtlasNavy, fontWeight = FontWeight.Bold)
     Spacer(Modifier.height(8.dp))
-    CountryGeometryMap(geometry)
+    CountryGeometryMap(country.code, geometry)
     Spacer(Modifier.height(8.dp))
     Text(
-        "Silueta local de ${country.name}. Está disponible sin conexión.",
+        "Mapa base de OpenStreetMap. La silueta de ${country.name} se mantiene disponible sin conexión.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontSize = 12.sp,
         lineHeight = 17.sp,
@@ -572,12 +565,57 @@ private fun CountryMapContent(country: Country, details: CountryDetails, geometr
 }
 
 @Composable
-private fun CountryGeometryMap(geometry: CountryGeometry) {
-    Canvas(
+private fun CountryGeometryMap(countryCode: String, geometry: CountryGeometry) {
+    var mapReady by remember(countryCode) { mutableStateOf(false) }
+    val mapUrl = "file:///android_asset/map.html?country=${countryCode.uppercase(Locale.ROOT)}"
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(250.dp)
             .clip(RoundedCornerShape(16.dp)),
+    ) {
+        OfflineCountryGeometryMap(geometry)
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer(alpha = if (mapReady) 1f else 0f),
+            factory = { webContext ->
+                WebView(webContext).apply {
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    settings.javaScriptEnabled = true
+                    settings.allowFileAccess = true
+                    @Suppress("DEPRECATION")
+                    settings.allowFileAccessFromFileURLs = true
+                    webViewClient = WebViewClient()
+                    addJavascriptInterface(
+                        object {
+                            @JavascriptInterface
+                            fun geometryReady() {
+                                post { mapReady = true }
+                            }
+                        },
+                        "AtlasBridge",
+                    )
+                    loadUrl(mapUrl)
+                }
+            },
+            update = { webView ->
+                if (webView.url != mapUrl) {
+                    mapReady = false
+                    webView.loadUrl(mapUrl)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun OfflineCountryGeometryMap(geometry: CountryGeometry) {
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxSize(),
     ) {
         drawRect(Color(0xFFEAF3F5))
         val points = geometry.polygons.flatten()

@@ -63,7 +63,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
@@ -79,8 +78,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -258,12 +255,8 @@ private fun CountryCard(country: Country) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data("https://flagcdn.com/w320/${country.code}.png")
-                        .build(),
-                    contentDescription = "Bandera de ${country.name}",
-                    contentScale = ContentScale.Crop,
+                LocalCountryFlag(
+                    country = country,
                     modifier = Modifier
                         .size(width = 76.dp, height = 56.dp)
                         .clip(RoundedCornerShape(9.dp))
@@ -333,6 +326,26 @@ private fun CountryCard(country: Country) {
     }
 }
 
+@Composable
+private fun LocalCountryFlag(country: Country, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val flagResource = remember(country.code) {
+        context.resources.getIdentifier("flag_${country.code.lowercase(Locale.ROOT)}", "drawable", context.packageName)
+    }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        if (flagResource != 0) {
+            Image(
+                painter = painterResource(flagResource),
+                contentDescription = "Bandera de ${country.name}",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text(country.code.uppercase(Locale.ROOT), color = AtlasNavy, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        }
+    }
+}
+
 private enum class SearchSite(val label: String) {
     GOOGLE("Google"),
     TIKTOK("TikTok"),
@@ -355,56 +368,21 @@ private fun SearchButton(site: SearchSite, modifier: Modifier, onClick: () -> Un
 
 @Composable
 private fun BrandIcon(site: SearchSite) {
-    Canvas(modifier = Modifier.size(24.dp)) {
-        when (site) {
-            SearchSite.GOOGLE -> drawGoogleMark()
-            SearchSite.TIKTOK -> drawTikTokMark()
-            SearchSite.YOUTUBE -> drawYouTubeMark()
+    when (site) {
+        SearchSite.GOOGLE -> Image(
+            painter = painterResource(R.drawable.brand_google),
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+        )
+        SearchSite.TIKTOK -> Image(
+            painter = painterResource(R.drawable.brand_tiktok),
+            contentDescription = null,
+            modifier = Modifier.size(24.dp),
+        )
+        SearchSite.YOUTUBE -> Canvas(modifier = Modifier.size(24.dp)) {
+            drawYouTubeMark()
         }
     }
-}
-
-private fun DrawScope.drawGoogleMark() {
-    val stroke = 3.3.dp.toPx()
-    val inset = stroke / 2f
-    val arcSize = Size(size.width - stroke, size.height - stroke)
-    val arcTopLeft = Offset(inset, inset)
-    val outline = Stroke(width = stroke, cap = StrokeCap.Round)
-    drawArc(Color(0xFF4285F4), -38f, 83f, false, arcTopLeft, arcSize, style = outline)
-    drawArc(Color(0xFF34A853), 45f, 77f, false, arcTopLeft, arcSize, style = outline)
-    drawArc(Color(0xFFFBBC05), 122f, 83f, false, arcTopLeft, arcSize, style = outline)
-    drawArc(Color(0xFFEA4335), 205f, 117f, false, arcTopLeft, arcSize, style = outline)
-    drawLine(
-        color = Color(0xFF4285F4),
-        start = Offset(size.width * .50f, size.height * .50f),
-        end = Offset(size.width - inset, size.height * .50f),
-        strokeWidth = stroke,
-        cap = StrokeCap.Round,
-    )
-}
-
-private fun DrawScope.drawTikTokMark() {
-    fun note(color: Color, shift: Float) {
-        val stroke = size.width * .16f
-        drawLine(
-            color = color,
-            start = Offset(size.width * .60f + shift, size.height * .14f),
-            end = Offset(size.width * .60f + shift, size.height * .68f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = color,
-            start = Offset(size.width * .60f + shift, size.height * .16f),
-            end = Offset(size.width * .87f + shift, size.height * .27f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawCircle(color, radius = size.width * .20f, center = Offset(size.width * .37f + shift, size.height * .72f))
-    }
-    note(Color(0xFF25F4EE), -1.8.dp.toPx())
-    note(Color(0xFFFE2C55), 1.8.dp.toPx())
-    note(Color(0xFF111111), 0f)
 }
 
 private fun DrawScope.drawYouTubeMark() {
@@ -439,7 +417,17 @@ private fun EmptyState() {
 @Composable
 private fun AtlasDialog(dialog: InfoDialog, dismiss: () -> Unit) {
     val (title, body) = when (dialog) {
-        InfoDialog.ABOUT -> "Acerca de" to "Atlas de Banderas 1105 es una guía visual para explorar las banderas de 195 países en español. Al tocar una bandera aparecen enlaces para buscar ese país en Google, TikTok y YouTube."
+        InfoDialog.ABOUT -> "Acerca de" to """
+            Atlas de Banderas 1105 es una guía visual para explorar las banderas de 195 países en español. Sus banderas, datos y mapas se almacenan localmente.
+
+            Fuentes y atribuciones:
+            • Datos de países: mledoze/countries (ODbL 1.0).
+            • Fronteras y geometrías: GeoJSON local incluido con el proyecto; conserva la atribución de su fuente original.
+            • Banderas: FlagCDN, empaquetadas como PNG locales de 320 px.
+            • Iconos de búsqueda: recursos oficiales de Google y TikTok; su uso se rige por sus directrices de marca.
+
+            Google, TikTok y YouTube son servicios de terceros; sus enlaces requieren conexión y sus marcas pertenecen a sus respectivos propietarios.
+        """.trimIndent()
         InfoDialog.TERMS -> "Términos y condiciones" to "Este borrador tiene fines informativos y educativos. Las búsquedas se abren en servicios de terceros y se rigen por sus términos. Las banderas se muestran para identificar países; no representan afiliación, patrocinio ni una posición política adicional."
     }
     AlertDialog(
@@ -552,9 +540,19 @@ private fun CountryMapDialog(country: Country, onDismiss: () -> Unit) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Top,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Mapa de ${country.name}", color = AtlasNavy, fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
-                        Text("Mapa sin conexión, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        LocalCountryFlag(
+                            country = country,
+                            modifier = Modifier
+                                .size(width = 54.dp, height = 40.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFE6ECEF)),
+                        )
+                        Spacer(Modifier.width(11.dp))
+                        Column {
+                            Text("Mapa de ${country.name}", color = AtlasNavy, fontWeight = FontWeight.ExtraBold, fontSize = 21.sp)
+                            Text("Mapa sin conexión, ubicación y datos relevantes", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        }
                     }
                     TextButton(onClick = onDismiss) { Text("Cerrar") }
                 }

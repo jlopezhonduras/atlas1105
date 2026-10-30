@@ -172,7 +172,7 @@ private fun AtlasApp() {
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     label = { Text("Buscar un país") },
-                    placeholder = { Text("Ej. Guatemala") },
+                    placeholder = { Text("Ej. Honduras") },
                     leadingIcon = { Text("⌕", fontSize = 26.sp, color = AtlasOcean) },
                     shape = RoundedCornerShape(16.dp),
                 )
